@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Photobooth A6 - Clean High Contrast</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Courier New', Courier, monospace;
+      background-color: #121212;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .camera-wrapper {
+      position: relative;
+      width: 480px;
+      height: 360px;
+      border: 4px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+      background-color: #000;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+      /* Preview limpo com alto contraste */
+      filter: grayscale(80%) sepia(20%) contrast(180%) brightness(100%);
+    }
+
+    .countdown-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 120px;
+      font-weight: bold;
+      color: #fff;
+      text-shadow: 0 0 20px rgba(0,0,0,0.8);
+      pointer-events: none;
+    }
+
+    button {
+      padding: 15px 30px;
+      font-size: 18px;
+      font-weight: bold;
+      background-color: #e63946;
+      color: white;
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(230, 57, 70, 0.4);
+      transition: all 0.2s ease;
+    }
+
+    button:hover {
+      background-color: #d62828;
+      transform: scale(1.05);
+    }
+
+    button:disabled {
+      background-color: #555;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+
+    #printContainer {
+      margin-top: 20px;
+      display: flex;
+      justify-content: center;
+    }
+
+    canvas {
+      display: block;
+      max-width: 350px;
+      height: auto;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.7);
+    }
+
+    /* --- REGRAS DE IMPRESSÃO A6 --- */
+    @page {
+      size: A6 portrait;
+      margin: 0;
+    }
+
+    @media print {
+      body {
+        background-color: #000;
+        padding: 0;
+        margin: 0;
+        display: block;
+      }
+
+      .app-container > *:not(#printContainer) {
+        display: none !important;
+      }
+
+      #printContainer {
+        margin: 0;
+        padding: 0;
+        width: 105mm;
+        height: 148mm;
+        position: absolute;
+        top: 0;
+        left: 0;
+      }
+
+      canvas {
+        width: 105mm !important;
+        height: 148mm !important;
+        max-width: none !important;
+        box-shadow: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Som do flash personalizado -->
+  <audio id="shutterAudio" src="1.mp3" preload="auto"></audio>
+
+  <div class="app-container">
+    <div class="camera-wrapper">
+      <video id="webcam" autoplay playsinline></video>
+      <div id="countdown" class="countdown-overlay"></div>
+    </div>
+
+    <button id="startButton">TIRAR FOTOS</button>
+
+    <div id="printContainer">
+      <canvas id="photoCanvas"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const startBtn = document.getElementById('startButton');
+    const countdownEl = document.getElementById('countdown');
+    const canvas = document.getElementById('photoCanvas');
+    const ctx = canvas.getContext('2d');
+    const shutterAudio = document.getElementById('shutterAudio');
+
+    let audioCtx;
+
+    function getAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      return audioCtx;
+    }
+
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 1280, height: 960 },
+          audio: false
+        });
+        video.srcObject = stream;
+      } catch (err) {
+        alert('Não foi possível acessar a câmera: ' + err.message);
+      }
+    }
+
+    // Som de Projetor de Cinema (1000Hz Sync Pop)
+    function playBeepSound() {
+      const actx = getAudioContext();
+      const now = actx.currentTime;
+
+      const osc = actx.createOscillator();
+      const oscGain = actx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1000, now);
+
+      oscGain.gain.setValueAtTime(0.25, now);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+      osc.connect(oscGain);
+      oscGain.connect(actx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.08);
+
+      const bufferSize = actx.sampleRate * 0.3;
+      const buffer = actx.createBuffer(1, bufferSize, actx.sampleRate);
+      const output = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        output[i] = Math.random() * 2 - 1;
+      }
+
+      const noise = actx.createBufferSource();
+      noise.buffer = buffer;
+
+      const filter = actx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(800, now);
+
+      const noiseGain = actx.createGain();
+      noiseGain.gain.setValueAtTime(0.08, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+
+      noise.connect(filter);
+      filter.connect(noiseGain);
+      noiseGain.connect(actx.destination);
+
+      noise.start(now);
+      noise.stop(now + 0.25);
+    }
+
+    function playCustomShutterSound() {
+      if (shutterAudio) {
+        shutterAudio.currentTime = 0;
+        shutterAudio.play().catch(e => console.log("Erro ao tocar áudio:", e));
+      }
+    }
+
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    function createSingleStrip(photos, stripWidth, stripHeight) {
+      const stripCanvas = document.createElement('canvas');
+      stripCanvas.width = stripWidth;
+      stripCanvas.height = stripHeight;
+      const sCtx = stripCanvas.getContext('2d');
+
+      const border = 24; 
+      const gap = 16;    
+      const bottomSpace = 65; 
+
+      const photoWidth = stripWidth - (border * 2);
+      const photoHeight = (stripHeight - (border * 2) - (gap * 3) - bottomSpace) / 4;
+
+      sCtx.fillStyle = '#000000';
+      sCtx.fillRect(0, 0, stripWidth, stripHeight);
+
+      photos.forEach((photo, index) => {
+        const yPos = border + index * (photoHeight + gap);
+        sCtx.drawImage(photo, border, yPos, photoWidth, photoHeight);
+      });
+
+      sCtx.fillStyle = '#777777';
+      sCtx.font = '18px "Courier New", monospace';
+      sCtx.textAlign = 'center';
+      const dateStr = new Date().toLocaleDateString('pt-BR');
+      sCtx.fillText(`HALLOWEEN DA FLOCA • ${dateStr}`, stripWidth / 2, stripHeight - 25);
+
+      return stripCanvas;
+    }
+
+    async function startPhotobooth() {
+      getAudioContext();
+      startBtn.disabled = true;
+      const photos = [];
+      
+      const captureWidth = 800;
+      const captureHeight = 600;
+
+      for (let i = 0; i < 4; i++) {
+        for (let count = 3; count > 0; count--) {
+          countdownEl.textContent = count;
+          playBeepSound(); 
+          await sleep(1000);
+        }
+        
+        countdownEl.textContent = '';
+        playCustomShutterSound();
+
+        document.body.style.backgroundColor = '#fff';
+        await sleep(100);
+        document.body.style.backgroundColor = '#121212';
+
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = captureWidth;
+        tempCanvas.height = captureHeight;
+        const tempCtx = tempCanvas.getContext('2d');
+
+        tempCtx.translate(captureWidth, 0);
+        tempCtx.scale(-1, 1);
+
+        // Filtro nativo limpo sem ruído nem texturas
+        tempCtx.filter = 'grayscale(80%) sepia(20%) contrast(180%) brightness(100%)';
+        tempCtx.drawImage(video, 0, 0, captureWidth, captureHeight);
+
+        photos.push(tempCanvas);
+
+        if (i < 3) {
+          await sleep(1500);
+        }
+      }
+
+      const totalWidth = 1240;
+      const totalHeight = 1748;
+      canvas.width = totalWidth;
+      canvas.height = totalHeight;
+
+      const stripWidth = totalWidth / 2;
+      const stripHeight = totalHeight;
+
+      const singleStrip = createSingleStrip(photos, stripWidth, stripHeight);
+
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, totalWidth, totalHeight);
+      
+      ctx.drawImage(singleStrip, 0, 0);
+      ctx.drawImage(singleStrip, stripWidth, 0);
+
+      ctx.strokeStyle = '#333333';
+      ctx.setLineDash([12, 12]);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(stripWidth, 0);
+      ctx.lineTo(stripWidth, totalHeight);
+      ctx.stroke();
+
+      startBtn.disabled = false;
+
+      setTimeout(() => {
+        window.print();
+      }, 500);
+    }
+
+    startBtn.addEventListener('click', startPhotobooth);
+    initCamera();
+  </script>
+</body>
+</html>
